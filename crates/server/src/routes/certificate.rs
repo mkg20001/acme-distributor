@@ -1,12 +1,11 @@
-use acme_distributor_common::{CertificateConfig, CertificateResponse};
-use glob_match::glob_match;
+use acme_distributor_common::CertificateResponse;
 use rocket::http::Status;
 use rocket::serde::json::Json;
 use rocket::{get, State};
-use std::collections::HashMap;
 use tracing::{debug, info};
 
-use crate::db::{self, NewCertificate};
+use crate::cert::{find_matching_certificate, issue_certificate};
+use crate::db;
 use crate::guards::AuthenticatedRequest;
 use crate::state::AppState;
 
@@ -62,31 +61,21 @@ pub async fn get_certificate(
                 Status::InternalServerError
             })?;
 
-            let result = provider
-                .issue(&cert_id, &names, state.challenge_store.clone())
-                .await
-                .map_err(|e| {
-                    tracing::error!("Issuance failed: {}", e);
-                    Status::InternalServerError
-                })?;
-
-            let new_cert = NewCertificate {
-                id: cert_id.clone(),
-                source: cert_config.id.clone(),
-                provider: cert_config.provider.clone(),
-                names: serde_json::to_string(&names).unwrap(),
-                cert_pem: Some(result.cert_pem),
-                key_pem: Some(result.key_pem),
-                ca_pem: Some(result.ca_pem),
-                chain_pem: Some(result.chain_pem),
-                expires_at: result.expires_at,
-                prefer_renew_before: result.prefer_renew_before,
-                prefer_renew_after: None,
-                requested_at: chrono::Utc::now().timestamp_millis(),
-            };
-
-            db::upsert_certificate(&mut conn, new_cert);
-            db::get_certificate(&mut conn, &cert_id).unwrap()
+            issue_certificate(
+                &mut conn,
+                &cert_id,
+                &cert_config.id,
+                provider,
+                &cert_config.provider,
+                &names,
+                state.challenge_store.clone(),
+                None,
+            )
+            .await
+            .map_err(|e| {
+                tracing::error!("Issuance failed: {}", e);
+                Status::InternalServerError
+            })?
         }
     };
 
@@ -102,34 +91,4 @@ pub async fn get_certificate(
         prefer_renew_before: cert.prefer_renew_before,
         prefer_renew_after: cert.prefer_renew_after,
     }))
-}
-
-fn matches_domain(pattern: &str, domain: &str) -> bool {
-    if domain == pattern {
-        return true;
-    }
-    glob_match(pattern, domain)
-}
-
-fn find_matching_certificate<'a>(
-    certs: &'a HashMap<String, CertificateConfig>,
-    domain: &str,
-) -> Option<&'a CertificateConfig> {
-    let mut matches: Vec<_> = certs
-        .values()
-        .filter(|c| {
-            c.names
-                .as_ref()
-                .map(|n| n.iter().any(|n| matches_domain(n, domain)))
-                .unwrap_or(false)
-                || c.domains
-                    .as_ref()
-                    .map(|d| d.iter().any(|d| matches_domain(d, domain)))
-                    .unwrap_or(false)
-        })
-        .collect();
-
-    // Prefer .names over .domains
-    matches.sort_by_key(|c| if c.names.is_some() { 0 } else { 1 });
-    matches.first().copied()
 }

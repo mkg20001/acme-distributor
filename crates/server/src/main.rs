@@ -1,19 +1,17 @@
 #[macro_use]
 extern crate rocket;
 
-use acme_distributor_common::{CertificateConfig, Config};
+use acme_distributor_common::Config;
 use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
 use rocket::figment::Figment;
 use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::{info, warn, Level};
+use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
-use challenge_store::SharedChallengeStore;
-use providers::Provider;
-
+mod cert;
 mod challenge_store;
 mod cron;
 mod db;
@@ -34,85 +32,6 @@ fn run_migrations(pool: &DbPool) {
     let mut conn = pool.get().expect("Failed to get database connection");
     conn.run_pending_migrations(MIGRATIONS)
         .expect("Failed to run migrations");
-}
-
-async fn check_and_issue_certificates(
-    db_pool: &DbPool,
-    providers: &HashMap<String, Arc<dyn Provider>>,
-    certificates: &HashMap<String, CertificateConfig>,
-    challenge_store: &SharedChallengeStore,
-) {
-    info!("Checking certificates on startup...");
-
-    for (cert_id, cert_config) in certificates {
-        // Only process certificates with explicit names (not dynamic domains)
-        let Some(ref names) = cert_config.names else {
-            continue;
-        };
-
-        let mut conn = match db_pool.get() {
-            Ok(c) => c,
-            Err(e) => {
-                warn!("Failed to get database connection: {}", e);
-                continue;
-            }
-        };
-
-        // Check if certificate exists and is valid
-        let existing = db::get_certificate(&mut conn, cert_id);
-        let needs_issuance = match existing {
-            None => {
-                info!("Certificate {} not found, will issue", cert_id);
-                true
-            }
-            Some(ref cert) if cert.is_expired() => {
-                info!("Certificate {} is expired, will issue", cert_id);
-                true
-            }
-            Some(_) => false,
-        };
-
-        if !needs_issuance {
-            continue;
-        }
-
-        // Get provider
-        let Some(provider) = providers.get(&cert_config.provider) else {
-            warn!(
-                "Provider {} not found for certificate {}",
-                cert_config.provider, cert_id
-            );
-            continue;
-        };
-
-        // Issue certificate
-        info!("Issuing certificate {} with provider {}", cert_id, cert_config.provider);
-        match provider.issue(cert_id, names, challenge_store.clone()).await {
-            Ok(result) => {
-                let new_cert = db::NewCertificate {
-                    id: cert_id.clone(),
-                    source: cert_id.clone(),
-                    provider: cert_config.provider.clone(),
-                    names: serde_json::to_string(names).unwrap(),
-                    cert_pem: Some(result.cert_pem),
-                    key_pem: Some(result.key_pem),
-                    ca_pem: Some(result.ca_pem),
-                    chain_pem: Some(result.chain_pem),
-                    expires_at: result.expires_at,
-                    prefer_renew_before: result.prefer_renew_before,
-                    prefer_renew_after: None,
-                    requested_at: chrono::Utc::now().timestamp_millis(),
-                };
-                db::upsert_certificate(&mut conn, new_cert);
-                info!("Certificate {} issued successfully", cert_id);
-            }
-            Err(e) => {
-                warn!("Failed to issue certificate {}: {}", cert_id, e);
-            }
-        }
-    }
-
-    info!("Startup certificate check complete");
 }
 
 #[launch]
@@ -171,14 +90,13 @@ async fn rocket() -> _ {
         .collect();
     info!("Loaded {} certificate configs", certificates_map.len());
 
-    // Check and issue certificates on startup
-    check_and_issue_certificates(
-        &db_pool,
-        &providers_map,
-        &certificates_map,
-        &challenge_store,
-    )
-    .await;
+    // Start background certificate issuance check
+    cert::start_startup_issuance(
+        db_pool.clone(),
+        providers_map.clone(),
+        certificates_map.clone(),
+        challenge_store.clone(),
+    );
 
     // Start cron job
     cron::start_cron(

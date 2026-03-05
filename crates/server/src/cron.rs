@@ -4,8 +4,9 @@ use std::time::Duration;
 use tokio::time::interval;
 use tracing::{debug, info, warn};
 
+use crate::cert::issue_certificate;
 use crate::challenge_store::SharedChallengeStore;
-use crate::db::{self, DbPool, NewCertificate};
+use crate::db::{self, DbPool};
 use crate::providers::Provider;
 use acme_distributor_common::CertificateConfig;
 
@@ -94,23 +95,19 @@ async fn run_cron(
             let provider = providers.get(&cert.provider).unwrap();
             let names = cert.get_names();
 
-            match provider.issue(&cert.id, &names, challenge_store.clone()).await {
-                Ok(result) => {
-                    let new_cert = NewCertificate {
-                        id: cert.id.clone(),
-                        source: cert.source.clone(),
-                        provider: cert.provider.clone(),
-                        names: cert.names.clone(),
-                        cert_pem: Some(result.cert_pem),
-                        key_pem: Some(result.key_pem),
-                        ca_pem: Some(result.ca_pem),
-                        chain_pem: Some(result.chain_pem),
-                        expires_at: result.expires_at,
-                        prefer_renew_before: result.prefer_renew_before,
-                        prefer_renew_after: None,
-                        requested_at: cert.requested_at,
-                    };
-                    db::upsert_certificate(&mut conn, new_cert);
+            match issue_certificate(
+                &mut conn,
+                &cert.id,
+                &cert.source,
+                provider,
+                &cert.provider,
+                &names,
+                challenge_store.clone(),
+                Some(cert.requested_at),
+            )
+            .await
+            {
+                Ok(_) => {
                     info!("Certificate {} renewed successfully", cert.id);
                 }
                 Err(e) => {
