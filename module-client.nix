@@ -49,7 +49,9 @@ let
 
         mkdir -p certificates
         #                       <domain $1>      <state loc $2> <credential path $3> <server $4>    <cert $5>    <key $6>                      <ca $7>                              <fullchain $8>
-        ${pkgs.acme-distributor-client}/bin/acme-distributor-client "${data.domain}" "$PWD/certificates/${keyName}.json" "${credentials}" "${cfg.distributor-server}" "/dev/null" "certificates/${keyName}.key" "certificates/${keyName}.issuer.crt" "certificates/${keyName}.crt"
+        if ${pkgs.acme-distributor-client}/bin/acme-distributor-client check --state "$PWD/certificates/${keyName}.json"; then
+          ${pkgs.acme-distributor-client}/bin/acme-distributor-client --domain "${data.domain}" --state "$PWD/certificates/${keyName}.json" --credential "${credentials}" --server-url "${cfg.distributor-server}" --out-cert "/dev/null" --out-key "certificates/${keyName}.key" --out-ca "certificates/${keyName}.issuer.crt" --out-chain "certificates/${keyName}.crt"
+        fi
 
         # mv domainhash.txt certificates/
         chmod 640 certificates/*
