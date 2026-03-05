@@ -1,6 +1,7 @@
 # Custom
 config.yaml
 _*
+ca/
 
 # Nix
 result
