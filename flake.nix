@@ -66,10 +66,16 @@
             lockFile = ./Cargo.lock;
           };
 
-          inherit buildInputs nativeBuildInputs;
+          inherit buildInputs;
+          nativeBuildInputs = nativeBuildInputs ++ [ pkgs.makeWrapper ];
 
           # Only build the server binary
           cargoBuildFlags = [ "-p" "acme-distributor-server" ];
+
+          postFixup = ''
+            wrapProgram $out/bin/acme-distributor \
+              --prefix PATH : ${pkgs.lib.makeBinPath [ acme-sh ]}
+          '';
 
           meta = with pkgs.lib; {
             description = "ACME certificate distributor server";
