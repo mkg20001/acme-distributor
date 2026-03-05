@@ -1,7 +1,10 @@
 use acme_distributor_common::{IssuanceResult, ProviderConfig};
 use async_trait::async_trait;
 use std::collections::HashMap;
+use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd};
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tracing::{debug, info};
 
@@ -47,7 +50,7 @@ impl Provider for AcmeShProvider {
         &self,
         id: &str,
         names: &[String],
-        _challenge_store: ChallengeStore_,
+        challenge_store: ChallengeStore_,
     ) -> Result<IssuanceResult, ProviderError> {
         info!("Issuing certificate {} for domains: {:?}", id, names);
 
@@ -83,24 +86,60 @@ impl Provider for AcmeShProvider {
 
         debug!("Running acme.sh with args: {:?}", args);
 
-        // Note: For DNS validation, acme.sh handles everything via the DNS plugin.
-        // For webroot validation, challenges are written to files in the webroot directory.
-        // We don't need to capture fd 3 for most use cases.
+        // Create pipe for fd 3 to receive challenge tokens from acme.sh
+        let (pipe_read, pipe_write) = os_pipe::pipe()
+            .map_err(|e| ProviderError::IssuanceFailed(format!("Failed to create pipe: {}", e)))?;
 
-        let output = Command::new("acme.sh")
-            .args(&args)
-            .envs(&env)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::inherit())
-            .stderr(std::process::Stdio::inherit())
-            .status()
+        // Spawn acme.sh with fd 3 connected to our pipe
+        let mut child = unsafe {
+            Command::new("acme.sh")
+                .args(&args)
+                .envs(&env)
+                .stdin(Stdio::null())
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
+                .pre_exec(move || {
+                    // Duplicate pipe_write to fd 3
+                    let write_fd = pipe_write.as_raw_fd();
+                    if write_fd != 3 {
+                        libc::dup2(write_fd, 3);
+                    }
+                    Ok(())
+                })
+                .spawn()
+                .map_err(|e| ProviderError::IssuanceFailed(format!("Failed to spawn acme.sh: {}", e)))?
+        };
+
+        // Convert pipe reader to async and spawn task to read challenge tokens
+        let async_reader = tokio::fs::File::from_std(unsafe {
+            std::fs::File::from_raw_fd(pipe_read.into_raw_fd())
+        });
+        let reader = BufReader::new(async_reader);
+        let mut lines = reader.lines();
+
+        let challenge_store_clone = challenge_store.clone();
+        let reader_task = tokio::spawn(async move {
+            while let Ok(Some(line)) = lines.next_line().await {
+                // Line format: "keyauthorization" where token is the part before the dot
+                let token = line.split('.').next().unwrap_or(&line);
+                info!("Challenge token={}, auth={}", token, line);
+                challenge_store_clone.write().await.insert(token.to_string(), line);
+            }
+        });
+
+        // Wait for acme.sh to complete
+        let status = child
+            .wait()
             .await
-            .map_err(|e| ProviderError::IssuanceFailed(format!("Failed to spawn acme.sh: {}", e)))?;
+            .map_err(|e| ProviderError::IssuanceFailed(format!("Failed to wait for acme.sh: {}", e)))?;
 
-        if !output.success() {
+        // Wait for reader task to finish
+        let _ = reader_task.await;
+
+        if !status.success() {
             return Err(ProviderError::IssuanceFailed(format!(
                 "acme.sh exited with status: {}",
-                output
+                status
             )));
         }
 

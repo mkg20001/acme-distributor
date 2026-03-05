@@ -53,3 +53,4 @@ async-trait = "0.1"
 
 # OS utilities
 os_pipe = "1.2"
+libc = "0.2"
