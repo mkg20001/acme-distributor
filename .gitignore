@@ -1,0 +1,15 @@
+
+# custom
+
+config.yaml
+result
+_*
+## add your entries
+
+# node
+
+node_modules
+yarn-error.log
+package-lock.json
+false
+.nyc_output
