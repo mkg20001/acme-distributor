@@ -1,15 +1,32 @@
-
-# custom
-
+# Custom
 config.yaml
-result
 _*
-## add your entries
 
-# node
+# Nix
+result
+result/
 
-node_modules
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Debug
+*.pdb
+
+# Legacy (Node.js)
+node_modules/
 yarn-error.log
 package-lock.json
-false
-.nyc_output
+.nyc_output/
