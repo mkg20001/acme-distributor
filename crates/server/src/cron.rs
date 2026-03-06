@@ -76,14 +76,8 @@ async fn run_cron(
 
         // Check if renewal is needed
         let should_renew = {
-            let past_renew_after = cert
-                .prefer_renew_after
-                .map(|t| t < now)
-                .unwrap_or(true);
-            let past_renew_before = cert
-                .prefer_renew_before
-                .map(|t| t < now)
-                .unwrap_or(false);
+            let past_renew_after = cert.prefer_renew_after.map(|t| t < now).unwrap_or(true);
+            let past_renew_before = cert.prefer_renew_before.map(|t| t < now).unwrap_or(false);
             let expires_soon = cert.expires_at < in_two_days;
 
             past_renew_after && (past_renew_before || expires_soon)

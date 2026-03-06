@@ -92,7 +92,9 @@ impl<'r> FromRequest<'r> for AuthenticatedRequest {
 
         // Validate IP against allowFrom CIDRs
         if let Some(ref allow_from) = token_config.allow_from {
-            let ip_allowed = allow_from.iter().any(|cidr| ip_matches_cidr(client_ip, cidr));
+            let ip_allowed = allow_from
+                .iter()
+                .any(|cidr| ip_matches_cidr(client_ip, cidr));
             if !ip_allowed {
                 debug!("IP {} not in allowed list: {:?}", client_ip, allow_from);
                 return Outcome::Error((Status::Unauthorized, AuthError::IpNotAllowed));
@@ -110,9 +112,9 @@ impl AuthenticatedRequest {
     pub fn can_access_domain(&self, domain: &str) -> bool {
         match &self.token_config.restrict_names {
             None => true,
-            Some(patterns) => patterns.iter().any(|pattern| {
-                domain == pattern || glob_match(pattern, domain)
-            }),
+            Some(patterns) => patterns
+                .iter()
+                .any(|pattern| domain == pattern || glob_match(pattern, domain)),
         }
     }
 }

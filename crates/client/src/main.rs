@@ -11,8 +11,16 @@ mod state;
 use cli::{Cli, Commands};
 use state::ClientState;
 
-async fn fetch_certificate(server_url: &str, domain: &str, credential: &str) -> Result<CertificateResponse> {
-    let url = format!("{}/certificate/{}", server_url.trim_end_matches('/'), domain);
+async fn fetch_certificate(
+    server_url: &str,
+    domain: &str,
+    credential: &str,
+) -> Result<CertificateResponse> {
+    let url = format!(
+        "{}/certificate/{}",
+        server_url.trim_end_matches('/'),
+        domain
+    );
 
     let client = reqwest::Client::new();
     let response = client
@@ -30,10 +38,7 @@ async fn fetch_certificate(server_url: &str, domain: &str, credential: &str) -> 
         );
     }
 
-    response
-        .json()
-        .await
-        .context("Failed to parse response")
+    response.json().await.context("Failed to parse response")
 }
 
 fn write_if_some<P: AsRef<Path>>(path: P, content: &Option<String>) -> Result<()> {
@@ -92,7 +97,9 @@ async fn main() -> Result<()> {
 
             // Read credential
             let cred = std::fs::read_to_string(&credential)
-                .with_context(|| format!("Failed to read credential file: {}", credential.display()))?
+                .with_context(|| {
+                    format!("Failed to read credential file: {}", credential.display())
+                })?
                 .trim()
                 .to_string();
 
@@ -110,7 +117,8 @@ async fn main() -> Result<()> {
                 prefer_renew_before: response.prefer_renew_before,
                 prefer_renew_after: response.prefer_renew_after,
             };
-            new_state.save(&state)
+            new_state
+                .save(&state)
                 .context("Failed to save state file")?;
 
             // Write certificate files

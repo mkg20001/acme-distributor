@@ -72,19 +72,13 @@ impl Provider for FileProvider {
         let ca_path = cert_dir.join("ca.pem");
         let chain_path = cert_dir.join("chain.pem");
 
-        let cert_pem = tokio::fs::read_to_string(&cert_path)
-            .await
-            .map_err(|e| ProviderError::IssuanceFailed(format!(
-                "Failed to read cert.pem: {}",
-                e
-            )))?;
+        let cert_pem = tokio::fs::read_to_string(&cert_path).await.map_err(|e| {
+            ProviderError::IssuanceFailed(format!("Failed to read cert.pem: {}", e))
+        })?;
 
         let key_pem = tokio::fs::read_to_string(&key_path)
             .await
-            .map_err(|e| ProviderError::IssuanceFailed(format!(
-                "Failed to read key.pem: {}",
-                e
-            )))?;
+            .map_err(|e| ProviderError::IssuanceFailed(format!("Failed to read key.pem: {}", e)))?;
 
         // CA is optional - use empty string if not present
         let ca_pem = tokio::fs::read_to_string(&ca_path)
@@ -92,12 +86,9 @@ impl Provider for FileProvider {
             .unwrap_or_default();
 
         // Chain is required
-        let chain_pem = tokio::fs::read_to_string(&chain_path)
-            .await
-            .map_err(|e| ProviderError::IssuanceFailed(format!(
-                "Failed to read chain.pem: {}",
-                e
-            )))?;
+        let chain_pem = tokio::fs::read_to_string(&chain_path).await.map_err(|e| {
+            ProviderError::IssuanceFailed(format!("Failed to read chain.pem: {}", e))
+        })?;
 
         // Parse expiry from certificate
         let expires_at = self.parse_cert_expiry(&cert_pem).await?;

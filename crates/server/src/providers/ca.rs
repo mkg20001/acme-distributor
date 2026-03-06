@@ -100,9 +100,13 @@ impl Provider for CaProvider {
             .map_err(|e| ProviderError::IssuanceFailed(format!("Failed to generate key: {}", e)))?;
 
         // Create certificate parameters with SANs
-        let first_name = names.first().cloned().unwrap_or_else(|| "localhost".to_string());
-        let mut params = CertificateParams::new(names.to_vec())
-            .map_err(|e| ProviderError::IssuanceFailed(format!("Failed to create params: {}", e)))?;
+        let first_name = names
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "localhost".to_string());
+        let mut params = CertificateParams::new(names.to_vec()).map_err(|e| {
+            ProviderError::IssuanceFailed(format!("Failed to create params: {}", e))
+        })?;
 
         // Set distinguished name
         let mut dn = DistinguishedName::new();
@@ -129,7 +133,9 @@ impl Provider for CaProvider {
         // This creates a cert with issuer DN from ca_cert, signed with ca_key
         let signed = params
             .signed_by(&key_pair, &ca_cert, &ca_key)
-            .map_err(|e| ProviderError::IssuanceFailed(format!("Failed to sign certificate: {}", e)))?;
+            .map_err(|e| {
+                ProviderError::IssuanceFailed(format!("Failed to sign certificate: {}", e))
+            })?;
 
         let cert_pem = signed.pem();
         let key_pem = key_pair.serialize_pem();

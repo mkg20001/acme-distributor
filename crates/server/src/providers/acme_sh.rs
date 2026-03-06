@@ -107,7 +107,9 @@ impl Provider for AcmeShProvider {
                     Ok(())
                 })
                 .spawn()
-                .map_err(|e| ProviderError::IssuanceFailed(format!("Failed to spawn acme.sh: {}", e)))?
+                .map_err(|e| {
+                    ProviderError::IssuanceFailed(format!("Failed to spawn acme.sh: {}", e))
+                })?
         };
 
         // Convert pipe reader to async and spawn task to read challenge tokens
@@ -123,15 +125,17 @@ impl Provider for AcmeShProvider {
                 // Line format: "keyauthorization" where token is the part before the dot
                 let token = line.split('.').next().unwrap_or(&line);
                 info!("Challenge token={}, auth={}", token, line);
-                challenge_store_clone.write().await.insert(token.to_string(), line);
+                challenge_store_clone
+                    .write()
+                    .await
+                    .insert(token.to_string(), line);
             }
         });
 
         // Wait for acme.sh to complete
-        let status = child
-            .wait()
-            .await
-            .map_err(|e| ProviderError::IssuanceFailed(format!("Failed to wait for acme.sh: {}", e)))?;
+        let status = child.wait().await.map_err(|e| {
+            ProviderError::IssuanceFailed(format!("Failed to wait for acme.sh: {}", e))
+        })?;
 
         // Wait for reader task to finish
         let _ = reader_task.await;
@@ -165,7 +169,10 @@ impl Provider for AcmeShProvider {
         let one_week_ms: i64 = 7 * 24 * 60 * 60 * 1000;
         let prefer_renew_before = Some(expires_at - one_week_ms);
 
-        info!("Certificate {} issued successfully, expires at {}", id, expires_at);
+        info!(
+            "Certificate {} issued successfully, expires at {}",
+            id, expires_at
+        );
 
         Ok(IssuanceResult {
             cert_pem,

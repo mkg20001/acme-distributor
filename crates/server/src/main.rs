@@ -69,7 +69,10 @@ async fn rocket() -> _ {
     let state_path = PathBuf::from(&config.state);
     let mut providers_map: HashMap<String, Arc<dyn providers::Provider>> = HashMap::new();
     for (id, provider_config) in &config.providers {
-        info!("Initializing provider: {} (type: {})", id, provider_config.provider_type);
+        info!(
+            "Initializing provider: {} (type: {})",
+            id, provider_config.provider_type
+        );
         let provider = create_provider(id, provider_config, &state_path);
         providers_map.insert(id.clone(), provider);
     }
