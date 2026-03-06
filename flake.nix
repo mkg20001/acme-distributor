@@ -121,6 +121,8 @@
 
           RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";
         };
+      } // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+        checks.integration = import ./test.nix { inherit self pkgs; };
       }
     ) // {
       # NixOS modules

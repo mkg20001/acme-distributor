@@ -32,7 +32,7 @@ in
 
   config = mkIf (cfg.enable) {
     services.acme-distributor.config = {
-      hapi = {
+      server = {
         host = "::";
         port = cfg.port;
       };
@@ -44,20 +44,20 @@ in
       allowedTCPPorts = [ cfg.port ];
     };
 
-    systemd.services.acme-distributor = with pkgs; {
+    systemd.services.acme-distributor = with pkgs; let
+      configFile = pkgs.writeText "config.yaml" (builtins.toJSON cfg.config);
+    in {
       wantedBy = [ "multi-user.target" ];
       after = [ "network.target" ];
       requires = [ "network-online.target" ];
 
       description = "acme-distributor";
 
-      environment.CONFIG = with builtins; toFile "config.json" (toJSON cfg.config);
-
       serviceConfig = {
         Type = "simple";
         DynamicUser = true;
         StateDirectory = "acme-distributor";
-        ExecStart = "${acme-distributor}/bin/acme-distributor";
+        ExecStart = "${acme-distributor}/bin/acme-distributor ${configFile}";
       };
     };
   };
