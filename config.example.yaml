@@ -14,6 +14,12 @@ providers:
     env:
       CF_Key: 1234
       CF_Email: you@example.com
+  # acme-lib provider uses HTTP-01 challenge (requires port 80)
+  le-http:
+    type: acme-lib
+    env:
+      email: you@example.com
+      # staging: 'true'  # use Let's Encrypt staging for testing
   ca:
     type: ca
     key: path/to/ca.key

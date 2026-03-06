@@ -35,6 +35,28 @@ certificates:
 
 Supported DNS plugins include: `dns_cf` (Cloudflare), `dns_aws` (Route53), `dns_gcloud` (Google Cloud DNS), and [many more](https://github.com/acmesh-official/acme.sh/wiki/dnsapi).
 
+### acme-lib (Let's Encrypt HTTP-01)
+
+Issues certificates from Let's Encrypt using HTTP-01 validation via the [acme-lib](https://crates.io/crates/acme-lib) crate. Requires the server to be reachable on port 80.
+
+```yaml
+providers:
+  letsencrypt-http:
+    type: acme-lib
+    env:
+      email: your-email@example.com
+      staging: 'true'  # optional: use staging for testing
+
+certificates:
+  example.com:
+    names:
+      - example.com
+      - www.example.com
+    provider: letsencrypt-http
+```
+
+The HTTP-01 challenge requires that `/.well-known/acme-challenge/` requests reach the acme-distributor server.
+
 ### ca (Local CA)
 
 Signs certificates using your own Certificate Authority. Useful for internal services and development environments.

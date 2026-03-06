@@ -31,6 +31,9 @@ hex = "0.4"
 rcgen = { version = "0.13", features = ["pem"] }
 x509-parser = "0.16"
 
+# ACME
+acme-lib = "0.9"
+
 # Network utilities
 ipnet = "2.10"
 
