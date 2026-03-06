@@ -110,3 +110,71 @@ Directory structure:
 
 See [config.example.yaml](config.example.yaml) for a complete configuration example.
 
+## NixOS Modules
+
+This flake provides two NixOS modules:
+
+### Server Module (`nixosModules.acme-distributor`)
+
+Runs the acme-distributor server:
+
+```nix
+{
+  imports = [ acme-distributor.nixosModules.acme-distributor ];
+
+  services.acme-distributor = {
+    enable = true;
+    port = 3444;
+    config = {
+      providers = { /* ... */ };
+      certificates = { /* ... */ };
+      tokens = [ { plain = "secret-token"; } ];
+    };
+  };
+}
+```
+
+### Client Shim Module (`nixosModules.acme-shim`)
+
+Replaces the standard NixOS `security.acme` module with acme-distributor. This allows you to use `security.acme.certs` and `services.nginx` with `enableACME = true` as usual, but certificates are fetched from your acme-distributor server instead of Let's Encrypt directly.
+
+```nix
+{
+  imports = [ acme-distributor.nixosModules.acme-shim ];
+
+  # Configure the acme-distributor server URL and token
+  security.acme = {
+    distributor-server = "http://acme-server.internal:3444";
+    distributor-token = "secret-token";
+
+    # Use security.acme.certs as normal
+    certs."example.com" = {
+      domain = "example.com";
+    };
+  };
+
+  # nginx with enableACME works as expected
+  services.nginx.virtualHosts."example.com" = {
+    enableACME = true;
+    forceSSL = true;
+  };
+}
+```
+
+**Key features:**
+
+- **Drop-in replacement**: Works with existing `security.acme.certs` configuration
+- **Automatic challenge routing**: When using nginx, `/.well-known/acme-challenge/` requests are automatically proxied to the acme-distributor server via `acmeFallbackHost`
+- **Systemd integration**: Replaces `acme-*` systemd services to use the acme-distributor client
+
+### Using the Overlay
+
+```nix
+{
+  nixpkgs.overlays = [ acme-distributor.overlays.default ];
+
+  # Packages available: pkgs.acme-distributor, pkgs.acme-distributor-client
+  environment.systemPackages = [ pkgs.acme-distributor-client ];
+}
+```
+
