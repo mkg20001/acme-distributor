@@ -18,6 +18,14 @@ providers:
     type: ca
     key: path/to/ca.key
     cert: path/to/ca.crt
+  # file provider reads certificates from local files
+  # directory structure: {state}/{provider-id}/{cert-id}/
+  #   - cert.pem   (end-entity certificate)
+  #   - key.pem    (private key)
+  #   - ca.pem     (CA certificate, optional)
+  #   - chain.pem  (fullchain: cert + intermediates + CA)
+  local-files:
+    type: file
 
 certificates:
   # "names" means get and renew a cert with those names
@@ -36,6 +44,11 @@ certificates:
     - thing.internal
     - '*.thing.internal'
     provider: ca
+  # manually managed certificate from local files
+  external.example.com:
+    names:
+    - external.example.com
+    provider: local-files
 
 tokens:
   - hashed: 'sha5hex(token)'
