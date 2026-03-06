@@ -4,14 +4,13 @@ use std::time::Duration;
 use tokio::time::interval;
 use tracing::{debug, info, warn};
 
-use crate::cert::issue_certificate;
+use crate::cert::{check_needs_deletion, issue_certificate};
 use crate::challenge_store::SharedChallengeStore;
 use crate::db::{self, DbPool};
 use crate::providers::Provider;
 use acme_distributor_common::CertificateConfig;
 
 const CRON_INTERVAL: Duration = Duration::from_secs(60 * 60); // 1 hour
-const SIXTY_DAYS_MS: i64 = 60 * 24 * 60 * 60 * 1000;
 
 pub fn start_cron(
     db_pool: DbPool,
@@ -41,64 +40,41 @@ async fn run_cron(
     let mut conn = db_pool.get()?;
     let certs = db::get_all_certificates(&mut conn);
 
-    let now = chrono::Utc::now().timestamp_millis();
-    let sixty_days_ago = now - SIXTY_DAYS_MS;
-
     for cert in certs {
-        // Delete if not requested in 60+ days and not a named certificate
-        if cert.requested_at < sixty_days_ago && !certificates.contains_key(&cert.id) {
-            info!("Deleting stale certificate: {}", cert.id);
-            db::delete_certificate(&mut conn, &cert.id);
-            continue;
-        }
-
-        // Delete if provider doesn't exist
-        if !providers.contains_key(&cert.provider) {
-            info!(
-                "Deleting certificate with missing provider: {} (provider: {})",
-                cert.id, cert.provider
-            );
-            db::delete_certificate(&mut conn, &cert.id);
-            continue;
-        }
-
-        // Delete if source certificate config doesn't exist
-        if !certificates.contains_key(&cert.source) {
-            info!(
-                "Deleting certificate with missing source: {} (source: {})",
-                cert.id, cert.source
-            );
+        // Check if certificate should be deleted
+        if let Some(reason) = check_needs_deletion(&cert, providers, certificates) {
+            info!("Deleting certificate {}: {}", cert.id, reason);
             db::delete_certificate(&mut conn, &cert.id);
             continue;
         }
 
         // Check if renewal is needed
-        let should_renew = cert.needs_renewal();
+        if !cert.needs_renewal() {
+            continue;
+        }
 
-        if should_renew {
-            info!("Renewing certificate: {}", cert.id);
+        info!("Renewing certificate {} (in renewal window)", cert.id);
 
-            let provider = providers.get(&cert.provider).unwrap();
-            let names = cert.get_names();
+        let provider = providers.get(&cert.provider).unwrap();
+        let names = cert.get_names();
 
-            match issue_certificate(
-                &mut conn,
-                &cert.id,
-                &cert.source,
-                provider,
-                &cert.provider,
-                &names,
-                challenge_store.clone(),
-                Some(cert.requested_at),
-            )
-            .await
-            {
-                Ok(_) => {
-                    info!("Certificate {} renewed successfully", cert.id);
-                }
-                Err(e) => {
-                    warn!("Failed to renew certificate {}: {}", cert.id, e);
-                }
+        match issue_certificate(
+            &mut conn,
+            &cert.id,
+            &cert.source,
+            provider,
+            &cert.provider,
+            &names,
+            challenge_store.clone(),
+            Some(cert.requested_at),
+        )
+        .await
+        {
+            Ok(_) => {
+                info!("Certificate {} renewed successfully", cert.id);
+            }
+            Err(e) => {
+                warn!("Failed to renew certificate {}: {}", cert.id, e);
             }
         }
     }

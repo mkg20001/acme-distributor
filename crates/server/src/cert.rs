@@ -2,12 +2,118 @@ use acme_distributor_common::CertificateConfig;
 use diesel::SqliteConnection;
 use glob_match::glob_match;
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 use tracing::{info, warn};
 
 use crate::challenge_store::SharedChallengeStore;
-use crate::db::{self, DbPool, NewCertificate};
+use crate::db::{self, Certificate, DbPool, NewCertificate};
 use crate::providers::{Provider, ProviderError};
+
+const SIXTY_DAYS_MS: i64 = 60 * 24 * 60 * 60 * 1000;
+
+/// Reason why a certificate needs to be issued or renewed
+#[derive(Debug)]
+pub enum IssuanceReason {
+    /// Certificate doesn't exist in the database
+    Missing,
+    /// Certificate has expired
+    Expired,
+    /// Provider was changed in config
+    ProviderChanged { old: String, new: String },
+    /// Domain names were changed in config
+    NamesChanged,
+    /// Certificate is within the renewal window
+    InRenewalWindow,
+}
+
+impl fmt::Display for IssuanceReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Missing => write!(f, "not found"),
+            Self::Expired => write!(f, "expired"),
+            Self::ProviderChanged { old, new } => {
+                write!(f, "provider changed ({} -> {})", old, new)
+            }
+            Self::NamesChanged => write!(f, "names changed"),
+            Self::InRenewalWindow => write!(f, "in renewal window"),
+        }
+    }
+}
+
+/// Reason why a certificate should be deleted
+#[derive(Debug)]
+pub enum DeletionReason {
+    /// Certificate hasn't been requested in 60+ days and is not a named certificate
+    Stale,
+    /// The provider no longer exists in config
+    MissingProvider,
+    /// The source certificate config no longer exists
+    MissingSourceConfig,
+}
+
+impl fmt::Display for DeletionReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Stale => write!(f, "not requested in 60+ days"),
+            Self::MissingProvider => write!(f, "provider no longer exists"),
+            Self::MissingSourceConfig => write!(f, "source config no longer exists"),
+        }
+    }
+}
+
+/// Check if a certificate needs to be issued or renewed
+pub fn check_needs_issuance(
+    cert: Option<&Certificate>,
+    config: &CertificateConfig,
+    names: &[String],
+) -> Option<IssuanceReason> {
+    match cert {
+        None => Some(IssuanceReason::Missing),
+        Some(cert) if cert.is_expired() => Some(IssuanceReason::Expired),
+        Some(cert) => {
+            if cert.provider != config.provider {
+                Some(IssuanceReason::ProviderChanged {
+                    old: cert.provider.clone(),
+                    new: config.provider.clone(),
+                })
+            } else if cert.get_names() != names {
+                Some(IssuanceReason::NamesChanged)
+            } else if cert.needs_renewal() {
+                Some(IssuanceReason::InRenewalWindow)
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// Check if a certificate should be deleted during maintenance
+pub fn check_needs_deletion(
+    cert: &Certificate,
+    providers: &HashMap<String, Arc<dyn Provider>>,
+    certificates: &HashMap<String, CertificateConfig>,
+) -> Option<DeletionReason> {
+    let now = chrono::Utc::now().timestamp_millis();
+    let sixty_days_ago = now - SIXTY_DAYS_MS;
+
+    // Delete if not requested in 60+ days and not a named certificate
+    if cert.requested_at < sixty_days_ago && !certificates.contains_key(&cert.id) {
+        return Some(DeletionReason::Stale);
+    }
+
+    // Delete if provider doesn't exist
+    if !providers.contains_key(&cert.provider) {
+        return Some(DeletionReason::MissingProvider);
+    }
+
+    // Delete if source certificate config doesn't exist
+    if !certificates.contains_key(&cert.source) {
+        return Some(DeletionReason::MissingSourceConfig);
+    }
+
+    None
+}
 
 /// Issue a certificate and save it to the database
 /// If `requested_at` is None, uses the current timestamp
@@ -134,50 +240,17 @@ async fn check_and_issue_certificates(
             }
         };
 
-        // Check if certificate exists and is valid
+        // Check if certificate needs issuance
         let existing = db::get_certificate(&mut conn, cert_id);
-        let needs_issuance = match existing {
-            None => {
-                info!("Certificate {} not found, will issue", cert_id);
-                true
-            }
-            Some(ref cert) if cert.is_expired() => {
-                info!("Certificate {} is expired, will issue", cert_id);
-                true
-            }
-            Some(ref cert) => {
-                // Check if provider changed - delete and re-issue
-                if cert.provider != cert_config.provider {
-                    info!(
-                        "Certificate {} provider changed ({} -> {}), deleting and re-issuing",
-                        cert_id, cert.provider, cert_config.provider
-                    );
-                    db::delete_certificate(&mut conn, cert_id);
-                    true
-                }
-                // Check if names changed - re-issue
-                else if cert.get_names() != *names {
-                    info!(
-                        "Certificate {} names changed, will re-issue",
-                        cert_id
-                    );
-                    true
-                }
-                // Check if certificate is in renewal window
-                else if cert.needs_renewal() {
-                    info!(
-                        "Certificate {} is in renewal window, will renew",
-                        cert_id
-                    );
-                    true
-                } else {
-                    false
-                }
-            }
+        let reason = check_needs_issuance(existing.as_ref(), cert_config, names);
+
+        let Some(reason) = reason else {
+            continue;
         };
 
-        if !needs_issuance {
-            continue;
+        // Delete certificate if provider changed (need fresh start with new provider)
+        if matches!(reason, IssuanceReason::ProviderChanged { .. }) {
+            db::delete_certificate(&mut conn, cert_id);
         }
 
         // Get provider
@@ -190,10 +263,7 @@ async fn check_and_issue_certificates(
         };
 
         // Issue certificate
-        info!(
-            "Issuing certificate {} with provider {}",
-            cert_id, cert_config.provider
-        );
+        info!("Certificate {} {}, issuing with provider {}", cert_id, reason, cert_config.provider);
         match issue_certificate(
             &mut conn,
             cert_id,
