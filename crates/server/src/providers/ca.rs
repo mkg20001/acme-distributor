@@ -4,6 +4,7 @@ use chrono::Datelike;
 use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair};
 use std::path::PathBuf;
 use tracing::info;
+use x509_parser::prelude::*;
 
 use super::traits::{ChallengeStore_, Provider, ProviderError};
 
@@ -52,14 +53,44 @@ impl Provider for CaProvider {
         let ca_key = KeyPair::from_pem(&ca_key_pem)
             .map_err(|e| ProviderError::ConfigError(format!("Failed to parse CA key: {}", e)))?;
 
-        // Create a CA certificate for signing purposes
-        // We reconstruct it using the loaded key
+        // Parse the CA certificate to extract its subject DN
+        let (_, ca_pem) = parse_x509_pem(ca_cert_pem.as_bytes())
+            .map_err(|e| ProviderError::ConfigError(format!("Failed to parse CA PEM: {:?}", e)))?;
+        let ca_x509 = ca_pem
+            .parse_x509()
+            .map_err(|e| ProviderError::ConfigError(format!("Failed to parse CA X509: {:?}", e)))?;
+
+        // Build CA params with the same subject DN as the original CA
         let mut ca_params = CertificateParams::default();
         ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+
+        // Extract and set the subject DN from the original CA
         let mut ca_dn = DistinguishedName::new();
-        ca_dn.push(DnType::CommonName, "Internal CA");
+        for rdn in ca_x509.subject().iter() {
+            for attr in rdn.iter() {
+                if let Ok(value) = attr.as_str() {
+                    let oid = attr.attr_type();
+                    if oid == &oid_registry::OID_X509_COMMON_NAME {
+                        ca_dn.push(DnType::CommonName, value);
+                    } else if oid == &oid_registry::OID_X509_ORGANIZATION_NAME {
+                        ca_dn.push(DnType::OrganizationName, value);
+                    } else if oid == &oid_registry::OID_X509_COUNTRY_NAME {
+                        ca_dn.push(DnType::CountryName, value);
+                    } else if oid == &oid_registry::OID_X509_LOCALITY_NAME {
+                        ca_dn.push(DnType::LocalityName, value);
+                    } else if oid == &oid_registry::OID_X509_STATE_OR_PROVINCE_NAME {
+                        ca_dn.push(DnType::StateOrProvinceName, value);
+                    }
+                }
+            }
+        }
         ca_params.distinguished_name = ca_dn;
 
+        // Reconstruct CA certificate for signing (same public key, same DN)
+        // Note: rcgen requires a Certificate object to use as issuer in signed_by().
+        // We call self_signed() here only to create that object - this is NOT the output.
+        // The actual end-entity cert is created below via signed_by(), which properly
+        // signs it with the CA key and sets the issuer DN from this reconstructed CA.
         let ca_cert = ca_params
             .self_signed(&ca_key)
             .map_err(|e| ProviderError::ConfigError(format!("Failed to create CA cert: {}", e)))?;
@@ -94,12 +125,13 @@ impl Provider for CaProvider {
             not_after.day() as u8,
         );
 
-        // Sign certificate with CA
-        let cert = params
+        // Sign end-entity certificate with CA (NOT self-signed)
+        // This creates a cert with issuer DN from ca_cert, signed with ca_key
+        let signed = params
             .signed_by(&key_pair, &ca_cert, &ca_key)
             .map_err(|e| ProviderError::IssuanceFailed(format!("Failed to sign certificate: {}", e)))?;
 
-        let cert_pem = cert.pem();
+        let cert_pem = signed.pem();
         let key_pem = key_pair.serialize_pem();
         // Chain includes the end-entity cert and the original CA cert
         let chain_pem = format!("{}\n{}", cert_pem, ca_cert_pem);
