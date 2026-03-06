@@ -74,6 +74,32 @@ pub fn find_matching_certificate<'a>(
     matches.first().copied()
 }
 
+/// Delete certificates from DB that are no longer defined in config
+pub fn cleanup_removed_certificates(
+    db_pool: &DbPool,
+    certificates: &HashMap<String, CertificateConfig>,
+) {
+    let mut conn = match db_pool.get() {
+        Ok(c) => c,
+        Err(e) => {
+            warn!("Failed to get database connection for cleanup: {}", e);
+            return;
+        }
+    };
+
+    let all_certs = db::get_all_certificates(&mut conn);
+    for cert in all_certs {
+        // Delete if source certificate config no longer exists
+        if !certificates.contains_key(&cert.source) {
+            info!(
+                "Deleting certificate {} (source config '{}' no longer exists)",
+                cert.id, cert.source
+            );
+            db::delete_certificate(&mut conn, &cert.id);
+        }
+    }
+}
+
 /// Check and issue certificates on startup (runs in background)
 pub fn start_startup_issuance(
     db_pool: DbPool,

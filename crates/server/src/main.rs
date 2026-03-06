@@ -93,6 +93,9 @@ async fn rocket() -> _ {
         .collect();
     info!("Loaded {} certificate configs", certificates_map.len());
 
+    // Cleanup certificates no longer in config
+    cert::cleanup_removed_certificates(&db_pool, &certificates_map);
+
     // Start background certificate issuance check
     cert::start_startup_issuance(
         db_pool.clone(),
