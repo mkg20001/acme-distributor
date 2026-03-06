@@ -145,7 +145,27 @@ async fn check_and_issue_certificates(
                 info!("Certificate {} is expired, will issue", cert_id);
                 true
             }
-            Some(_) => false,
+            Some(ref cert) => {
+                // Check if provider changed - delete and re-issue
+                if cert.provider != cert_config.provider {
+                    info!(
+                        "Certificate {} provider changed ({} -> {}), deleting and re-issuing",
+                        cert_id, cert.provider, cert_config.provider
+                    );
+                    db::delete_certificate(&mut conn, cert_id);
+                    true
+                }
+                // Check if names changed - re-issue
+                else if cert.get_names() != *names {
+                    info!(
+                        "Certificate {} names changed, will re-issue",
+                        cert_id
+                    );
+                    true
+                } else {
+                    false
+                }
+            }
         };
 
         if !needs_issuance {
