@@ -91,14 +91,20 @@ impl Provider for AcmeLibProvider {
             };
 
             debug!("Connecting to ACME directory: {:?}", url);
+            debug!("Account state path: {:?}", state_path);
 
             // Create directory and account
+            // FilePersist stores account credentials in the state directory
+            // and reuses them automatically on subsequent calls
             let dir = Directory::from_url(persist, url)
                 .map_err(|e| ProviderError::IssuanceFailed(format!("Directory error: {}", e)))?;
 
+            // This will load existing account from disk or create a new one
             let acc = dir
                 .account(&email)
                 .map_err(|e| ProviderError::IssuanceFailed(format!("Account error: {}", e)))?;
+
+            info!("Using ACME account for email: {}", email);
 
             // Create order
             let alt_refs: Vec<&str> = alt_names.iter().map(|s| s.as_str()).collect();
