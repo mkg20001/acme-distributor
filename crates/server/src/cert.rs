@@ -162,6 +162,14 @@ async fn check_and_issue_certificates(
                         cert_id
                     );
                     true
+                }
+                // Check if certificate is in renewal window
+                else if cert.needs_renewal() {
+                    info!(
+                        "Certificate {} is in renewal window, will renew",
+                        cert_id
+                    );
+                    true
                 } else {
                     false
                 }

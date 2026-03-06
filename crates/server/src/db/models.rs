@@ -39,6 +39,8 @@ pub struct NewCertificate {
     pub requested_at: i64,
 }
 
+const TWO_DAYS_MS: i64 = 2 * 24 * 60 * 60 * 1000;
+
 impl Certificate {
     pub fn get_names(&self) -> Vec<String> {
         serde_json::from_str(&self.names).unwrap_or_default()
@@ -47,5 +49,22 @@ impl Certificate {
     pub fn is_expired(&self) -> bool {
         let now = chrono::Utc::now().timestamp_millis();
         self.expires_at <= now
+    }
+
+    /// Check if certificate is in the renewal window.
+    /// Returns true if:
+    /// - We're past prefer_renew_before (typically 7 days before expiry), OR
+    /// - Certificate expires within 2 days
+    pub fn needs_renewal(&self) -> bool {
+        let now = chrono::Utc::now().timestamp_millis();
+        let in_two_days = now + TWO_DAYS_MS;
+
+        let past_renew_before = self
+            .prefer_renew_before
+            .map(|t| t < now)
+            .unwrap_or(false);
+        let expires_soon = self.expires_at < in_two_days;
+
+        past_renew_before || expires_soon
     }
 }

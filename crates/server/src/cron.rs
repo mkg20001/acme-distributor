@@ -12,7 +12,6 @@ use acme_distributor_common::CertificateConfig;
 
 const CRON_INTERVAL: Duration = Duration::from_secs(60 * 60); // 1 hour
 const SIXTY_DAYS_MS: i64 = 60 * 24 * 60 * 60 * 1000;
-const TWO_DAYS_MS: i64 = 2 * 24 * 60 * 60 * 1000;
 
 pub fn start_cron(
     db_pool: DbPool,
@@ -44,7 +43,6 @@ async fn run_cron(
 
     let now = chrono::Utc::now().timestamp_millis();
     let sixty_days_ago = now - SIXTY_DAYS_MS;
-    let in_two_days = now + TWO_DAYS_MS;
 
     for cert in certs {
         // Delete if not requested in 60+ days and not a named certificate
@@ -75,13 +73,7 @@ async fn run_cron(
         }
 
         // Check if renewal is needed
-        let should_renew = {
-            let past_renew_after = cert.prefer_renew_after.map(|t| t < now).unwrap_or(true);
-            let past_renew_before = cert.prefer_renew_before.map(|t| t < now).unwrap_or(false);
-            let expires_soon = cert.expires_at < in_two_days;
-
-            past_renew_after && (past_renew_before || expires_soon)
-        };
+        let should_renew = cert.needs_renewal();
 
         if should_renew {
             info!("Renewing certificate: {}", cert.id);
