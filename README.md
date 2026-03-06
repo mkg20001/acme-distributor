@@ -178,3 +178,9 @@ Replaces the standard NixOS `security.acme` module with acme-distributor. This a
 }
 ```
 
+## Development
+
+```sh
+cargo watch -- cargo run --bin acme-distributor
+```
+

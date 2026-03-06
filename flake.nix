@@ -40,6 +40,7 @@
         devShells.default = pkgs.mkShell {
           buildInputs = [
             rustToolchain
+            pkgs.cargo-watch
             pkgs.pkg-config
             pkgs.diesel-cli
             pkgs.openssl
