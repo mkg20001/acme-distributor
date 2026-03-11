@@ -13,22 +13,28 @@
   outputs = { self, nixpkgs, flake-utils, rust-overlay }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        pkgs = import nixpkgs {
-          inherit system;
-          overlays = [ (import rust-overlay) ];
+        pkgs = import nixpkgs { inherit system; };
+
+        # Get rust-bin without merging the overlay into pkgs
+        rust-bin = (pkgs.extend (import rust-overlay)).rust-bin;
+
+        rustToolchain = rust-bin.stable.latest.default.override {
+          extensions = [ "rust-src" "rust-analyzer" ];
         };
 
-        rustToolchain = pkgs.rust-bin.stable.latest.default.override {
-          extensions = [ "rust-src" "rust-analyzer" ];
+        rustPlatform = pkgs.makeRustPlatform {
+          cargo = rustToolchain;
+          rustc = rustToolchain;
         };
 
         # Use callPackage for the packages
         acme-sh-patched = pkgs.callPackage ./nix/acme-sh-patched.nix {};
         acme-distributor = pkgs.callPackage ./nix/acme-distributor.nix {
-          inherit acme-sh-patched;
+          inherit acme-sh-patched rustPlatform;
           src = self;
         };
         acme-distributor-client = pkgs.callPackage ./nix/acme-distributor-client.nix {
+          inherit rustPlatform;
           src = self;
         };
       in {
@@ -61,15 +67,25 @@
       };
 
       # Overlay for use in other flakes
-      overlays.default = final: prev: {
-        acme-sh-patched = prev.callPackage ./nix/acme-sh-patched.nix {};
-        acme-distributor = prev.callPackage ./nix/acme-distributor.nix {
-          inherit (final) acme-sh-patched;
-          src = self;
+      overlays.default = final: prev:
+        let
+          rust-bin = (prev.extend (import rust-overlay)).rust-bin;
+          rustToolchain = rust-bin.stable.latest.default;
+          rustPlatform = prev.makeRustPlatform {
+            cargo = rustToolchain;
+            rustc = rustToolchain;
+          };
+        in {
+          acme-sh-patched = prev.callPackage ./nix/acme-sh-patched.nix {};
+          acme-distributor = prev.callPackage ./nix/acme-distributor.nix {
+            inherit (final) acme-sh-patched;
+            inherit rustPlatform;
+            src = self;
+          };
+          acme-distributor-client = prev.callPackage ./nix/acme-distributor-client.nix {
+            inherit rustPlatform;
+            src = self;
+          };
         };
-        acme-distributor-client = prev.callPackage ./nix/acme-distributor-client.nix {
-          src = self;
-        };
-      };
     };
 }
