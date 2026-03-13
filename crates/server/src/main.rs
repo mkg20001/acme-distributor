@@ -137,6 +137,6 @@ async fn rocket() -> _ {
         .manage(challenge_store)
         .mount(
             "/",
-            routes![routes::serve_challenge, routes::get_certificate],
+            routes![routes::status, routes::serve_challenge, routes::get_certificate],
         )
 }
