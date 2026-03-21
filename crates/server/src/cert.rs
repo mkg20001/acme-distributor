@@ -4,11 +4,27 @@ use glob_match::glob_match;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 use crate::challenge_store::SharedChallengeStore;
 use crate::db::{self, Certificate, DbPool, NewCertificate};
 use crate::providers::{Provider, ProviderError};
+
+/// Per-certificate locks to prevent concurrent renewal of the same certificate.
+/// The outer Mutex guards the map; the inner Mutex is the per-cert lock.
+pub type RenewalLocks = Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>;
+
+pub fn create_renewal_locks() -> RenewalLocks {
+    Arc::new(Mutex::new(HashMap::new()))
+}
+
+async fn acquire_cert_lock(locks: &RenewalLocks, cert_id: &str) -> Arc<Mutex<()>> {
+    let mut map = locks.lock().await;
+    map.entry(cert_id.to_string())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
+}
 
 const SIXTY_DAYS_MS: i64 = 60 * 24 * 60 * 60 * 1000;
 
@@ -148,6 +164,48 @@ pub async fn issue_certificate(
     Ok(db::get_certificate(conn, cert_id).unwrap())
 }
 
+/// Like `issue_certificate`, but ensures only one issuance runs per certificate at a time.
+/// If another task is already issuing this certificate, waits for it to complete.
+/// After acquiring the lock, checks if the certificate was already created while waiting —
+/// if it no longer needs renewal, returns it immediately without re-issuing.
+pub async fn issue_certificate_locked(
+    db_pool: &DbPool,
+    cert_id: &str,
+    source: &str,
+    provider: &Arc<dyn Provider>,
+    provider_name: &str,
+    names: &[String],
+    challenge_store: SharedChallengeStore,
+    requested_at: Option<i64>,
+    locks: &RenewalLocks,
+) -> Result<db::Certificate, ProviderError> {
+    let cert_lock = acquire_cert_lock(locks, cert_id).await;
+    let _guard = cert_lock.lock().await;
+
+    let mut conn = db_pool
+        .get()
+        .map_err(|e| ProviderError::IssuanceFailed(format!("DB pool error: {}", e)))?;
+
+    // After acquiring the lock, check if cert was already issued while we were waiting
+    if let Some(cert) = db::get_certificate(&mut conn, cert_id) {
+        if !cert.needs_renewal() {
+            return Ok(cert);
+        }
+    }
+
+    issue_certificate(
+        &mut conn,
+        cert_id,
+        source,
+        provider,
+        provider_name,
+        names,
+        challenge_store,
+        requested_at,
+    )
+    .await
+}
+
 /// Check if a domain matches a pattern (exact match or glob)
 pub fn matches_domain(pattern: &str, domain: &str) -> bool {
     if domain == pattern {
@@ -212,9 +270,11 @@ pub fn start_startup_issuance(
     providers: HashMap<String, Arc<dyn Provider>>,
     certificates: HashMap<String, CertificateConfig>,
     challenge_store: SharedChallengeStore,
+    locks: RenewalLocks,
 ) {
     tokio::spawn(async move {
-        check_and_issue_certificates(&db_pool, &providers, &certificates, &challenge_store).await;
+        check_and_issue_certificates(&db_pool, &providers, &certificates, &challenge_store, &locks)
+            .await;
     });
 }
 
@@ -223,6 +283,7 @@ async fn check_and_issue_certificates(
     providers: &HashMap<String, Arc<dyn Provider>>,
     certificates: &HashMap<String, CertificateConfig>,
     challenge_store: &SharedChallengeStore,
+    locks: &RenewalLocks,
 ) {
     info!("Checking certificates on startup...");
 
@@ -264,8 +325,8 @@ async fn check_and_issue_certificates(
 
         // Issue certificate
         info!("Certificate {} {}, issuing with provider {}", cert_id, reason, cert_config.provider);
-        match issue_certificate(
-            &mut conn,
+        match issue_certificate_locked(
+            db_pool,
             cert_id,
             cert_id,
             provider,
@@ -273,6 +334,7 @@ async fn check_and_issue_certificates(
             names,
             challenge_store.clone(),
             None,
+            locks,
         )
         .await
         {

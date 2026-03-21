@@ -96,12 +96,16 @@ async fn rocket() -> _ {
     // Cleanup certificates no longer in config
     cert::cleanup_removed_certificates(&db_pool, &certificates_map);
 
+    // Create renewal locks (shared across startup check, cron, and HTTP handlers)
+    let renewal_locks = cert::create_renewal_locks();
+
     // Start background certificate issuance check
     cert::start_startup_issuance(
         db_pool.clone(),
         providers_map.clone(),
         certificates_map.clone(),
         challenge_store.clone(),
+        renewal_locks.clone(),
     );
 
     // Start cron job
@@ -110,6 +114,7 @@ async fn rocket() -> _ {
         providers_map.clone(),
         certificates_map.clone(),
         challenge_store.clone(),
+        renewal_locks.clone(),
     );
 
     // Build app state
@@ -120,6 +125,7 @@ async fn rocket() -> _ {
         config: config.clone(),
         tokens: tokens_map,
         certificates: certificates_map,
+        renewal_locks,
     };
 
     // Configure Rocket

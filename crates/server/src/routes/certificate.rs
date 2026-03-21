@@ -4,7 +4,7 @@ use rocket::serde::json::Json;
 use rocket::{get, State};
 use tracing::{debug, info};
 
-use crate::cert::{find_matching_certificate, issue_certificate};
+use crate::cert::{find_matching_certificate, issue_certificate_locked};
 use crate::db;
 use crate::guards::AuthenticatedRequest;
 use crate::state::AppState;
@@ -61,8 +61,8 @@ pub async fn get_certificate(
                 Status::InternalServerError
             })?;
 
-            issue_certificate(
-                &mut conn,
+            issue_certificate_locked(
+                &state.db_pool,
                 &cert_id,
                 &cert_config.id,
                 provider,
@@ -70,6 +70,7 @@ pub async fn get_certificate(
                 &names,
                 state.challenge_store.clone(),
                 None,
+                &state.renewal_locks,
             )
             .await
             .map_err(|e| {
