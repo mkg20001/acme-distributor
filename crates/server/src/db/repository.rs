@@ -1,5 +1,5 @@
 use diesel::prelude::*;
-use diesel::r2d2::{ConnectionManager, Pool, PooledConnection};
+use diesel::r2d2::{ConnectionManager, CustomizeConnection, Pool, PooledConnection};
 use diesel::SqliteConnection;
 
 use super::models::{Certificate, NewCertificate};
@@ -8,10 +8,26 @@ use super::schema::certificates;
 pub type DbPool = Pool<ConnectionManager<SqliteConnection>>;
 pub type DbConn = PooledConnection<ConnectionManager<SqliteConnection>>;
 
+#[derive(Debug)]
+struct SqliteConnectionCustomizer;
+
+impl CustomizeConnection<SqliteConnection, diesel::r2d2::Error> for SqliteConnectionCustomizer {
+    fn on_acquire(&self, conn: &mut SqliteConnection) -> Result<(), diesel::r2d2::Error> {
+        diesel::sql_query("PRAGMA journal_mode = WAL")
+            .execute(conn)
+            .map_err(|e| diesel::r2d2::Error::QueryError(e))?;
+        diesel::sql_query("PRAGMA busy_timeout = 5000")
+            .execute(conn)
+            .map_err(|e| diesel::r2d2::Error::QueryError(e))?;
+        Ok(())
+    }
+}
+
 pub fn create_pool(database_url: &str) -> DbPool {
     let manager = ConnectionManager::<SqliteConnection>::new(database_url);
     Pool::builder()
         .max_size(10)
+        .connection_customizer(Box::new(SqliteConnectionCustomizer))
         .build(manager)
         .expect("Failed to create database pool")
 }
@@ -58,13 +74,15 @@ pub fn upsert_certificate(conn: &mut SqliteConnection, cert: NewCertificate) {
 pub fn update_requested_at(conn: &mut SqliteConnection, cert_id: &str) {
     let now = chrono::Utc::now().timestamp_millis();
 
-    diesel::update(certificates::table.find(cert_id))
+    if let Err(e) = diesel::update(certificates::table.find(cert_id))
         .set((
             certificates::requested_at.eq(now),
             certificates::updated_at.eq(now),
         ))
         .execute(conn)
-        .expect("Error updating requested_at");
+    {
+        tracing::warn!("Failed to update requested_at for {}: {}", cert_id, e);
+    }
 }
 
 pub fn delete_certificate(conn: &mut SqliteConnection, cert_id: &str) {
