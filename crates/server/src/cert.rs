@@ -214,28 +214,51 @@ pub fn matches_domain(pattern: &str, domain: &str) -> bool {
     glob_match(pattern, domain)
 }
 
+fn match_specificity(pattern: &str, domain: &str) -> Option<usize> {
+    if domain == pattern {
+        return Some(1_000_000 + pattern.len());
+    }
+
+    if glob_match(pattern, domain) {
+        return Some(pattern.chars().filter(|c| *c != '*').count());
+    }
+
+    None
+}
+
+fn best_pattern_specificity(patterns: &[String], domain: &str) -> Option<usize> {
+    patterns
+        .iter()
+        .filter_map(|pattern| match_specificity(pattern, domain))
+        .max()
+}
+
 /// Find a matching certificate config for a domain
 pub fn find_matching_certificate<'a>(
     certs: &'a HashMap<String, CertificateConfig>,
     domain: &str,
 ) -> Option<&'a CertificateConfig> {
-    let mut matches: Vec<_> = certs
+    certs
         .values()
-        .filter(|c| {
-            c.names
+        .filter_map(|c| {
+            let names_score = c
+                .names
                 .as_ref()
-                .map(|n| n.iter().any(|n| matches_domain(n, domain)))
-                .unwrap_or(false)
-                || c.domains
-                    .as_ref()
-                    .map(|d| d.iter().any(|d| matches_domain(d, domain)))
-                    .unwrap_or(false)
-        })
-        .collect();
+                .and_then(|names| best_pattern_specificity(names, domain))
+                // Prefer .names over equally-specific .domains entries.
+                .map(|score| score + 10_000);
+            let domains_score = c
+                .domains
+                .as_ref()
+                .and_then(|domains| best_pattern_specificity(domains, domain));
 
-    // Prefer .names over .domains
-    matches.sort_by_key(|c| if c.names.is_some() { 0 } else { 1 });
-    matches.first().copied()
+            names_score
+                .or(domains_score)
+                .map(|score| (score, c.id.as_str(), c))
+        })
+        // Highest specificity wins; id makes ties deterministic.
+        .max_by_key(|(score, id, _)| (*score, *id))
+        .map(|(_, _, c)| c)
 }
 
 /// Delete certificates from DB that are no longer defined in config
