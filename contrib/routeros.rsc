@@ -1,4 +1,4 @@
-# acme-distributor client for MikroTik RouterOS 7
+# acme-distributor client for MikroTik RouterOS 7.13+
 #
 # Fetches a certificate daily and installs it as the router's TLS certificate.
 # Only touches the router when the certificate actually changed (compared by
@@ -41,7 +41,7 @@
   :if ([ :len [ /file/find where name=$1 ] ] = 0) do={ :error ("writing " . $1 . " timed out") }
 }
 
-:do {
+:onerror Err {
   :local Res [ /tool/fetch url=($Server . "/certificate/" . $Domain) \
     http-header-field=({ ("x-credential: " . $Token) }) \
     check-certificate=$CheckCert output=user as-value ]
@@ -49,9 +49,9 @@
   :local Cert [ :tostr ($Json->"cert") ]
   :local Ca [ :tostr ($Json->"ca") ]
   :local Key [ :tostr ($Json->"key") ]
-  :local Expires [ :tostr ($Json->"expires_at") ]
+  :local Expires [ :tostr ($Json->"expiresAt") ]
 
-  :if ([ :len $Cert ] = 0 or [ :len $Key ] = 0) do={
+  :if ([ :len $Cert ] = 0 or [ :len $Key ] = 0 or [ :len $Expires ] = 0) do={
     :error "server returned an empty certificate"
   }
 
@@ -67,11 +67,10 @@
     $WriteFile $KeyFile $Key
     :if ([ :len $Ca ] > 0) do={ $WriteFile $CaFile $Ca }
 
-    # free the name, but keep the old certificate until services are repointed
-    /certificate/remove [ find where name~("^old-" . $CertName) ]
-    :foreach C in=[ /certificate/find where name~("^" . $CertName) ] do={
-      /certificate/set $C name=("old-" . [ /certificate/get $C name ])
-    }
+    # RouterOS refuses to import a certificate that is already in the store,
+    # so the old entries go first: services keep a dangling reference for the
+    # moment it takes to import and repoint them below
+    /certificate/remove [ find where name~("^" . $CertName) ]
 
     /certificate/import file-name=$PemFile name=$CertName passphrase="" as-value
     /certificate/import file-name=$KeyFile passphrase="" as-value
@@ -90,18 +89,12 @@
       /ip/service/set [ find where name=$S ] certificate=$LeafName
     }
 
-    :do {
-      /certificate/remove [ find where name~("^old-" . $CertName) ]
-    } on-error={
-      :log warning ("acme-distributor: old certificate for " . $Domain . " is still in use, kept")
-    }
-
     /file/remove [ find where name=$StampFile ]
     /file/add name=$StampFile contents=$Expires
-    :log info ("acme-distributor: installed " . $LeafName . " for " . $Domain . ", valid until " . $Expires)
+    :log info ("acme-distributor: installed " . $LeafName . " for " . $Domain . ", expires at unix " . $Expires)
   }
-} on-error={
+} do={
   :set AcmeDistData ""
   /file/remove [ find where name=$PemFile or name=$KeyFile or name=$CaFile ]
-  :log error ("acme-distributor: updating certificate for " . $Domain . " failed")
+  :log error ("acme-distributor: updating certificate for " . $Domain . " failed: " . $Err)
 }
