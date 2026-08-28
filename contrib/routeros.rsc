@@ -15,7 +15,7 @@
 
 :local Server "https://acme.example.com:3444"
 :local Token "your-token-here"
-:local Domain "router.oliver-koss.at"
+:local Domain "router.example.com"
 :local Services ({ "www-ssl"; "api-ssl" })
 :local CheckCert "yes-without-crl"
 
