@@ -178,6 +178,21 @@ Replaces the standard NixOS `security.acme` module with acme-distributor. This a
 }
 ```
 
+## MikroTik RouterOS
+
+[contrib/routeros.rsc](contrib/routeros.rsc) fetches a certificate once a day and installs it as the router's TLS certificate (`www-ssl`, `api-ssl`).
+
+Edit `$Server`, `$Token` and `$Domain` at the top, upload the file to the router and run:
+
+```
+/system/script/add name=acme-distributor policy=read,write,policy,test \
+  source=[/file/get [find where name="routeros.rsc"] contents]
+/system/scheduler/add name=acme-distributor interval=1d start-time=03:00:00 \
+  policy=read,write,policy,test on-event="/system/script/run acme-distributor"
+```
+
+It only re-imports when the certificate changed, so the daily run is a no-op in between renewals. Requires RouterOS 7 (uses `:deserialize from=json`), a working clock and DNS, and that the router trusts the CA of the acme-distributor server.
+
 ## Development
 
 ```sh
