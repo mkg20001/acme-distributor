@@ -60,6 +60,7 @@
     :set Stamp [ /file/get [ /file/find where name=$StampFile ] contents ]
   }
 
+  :local Fresh false
   :if ($Stamp = $Expires and [ :len [ /certificate/find where name~("^" . $CertName) ] ] > 0) do={
     :log debug ("acme-distributor: certificate for " . $Domain . " is up to date")
   } else={
@@ -79,19 +80,33 @@
     }
     /file/remove [ find where name=$PemFile or name=$KeyFile or name=$CaFile ]
 
-    :local Leaf [ /certificate/find where name=$CertName ]
-    :if ([ :len $Leaf ] = 0) do={ :set Leaf [ /certificate/find where name=($CertName . "_0") ] }
-    :if ([ :len $Leaf ] != 1) do={ :error "imported certificate not found" }
-    :local LeafName [ /certificate/get ($Leaf->0) name ]
-
-    # ponytail: only www-ssl/api-ssl are repointed, add hotspot/ovpn/ipsec to $Services if used
-    :foreach S in=$Services do={
-      /ip/service/set [ find where name=$S ] certificate=$LeafName
-    }
-
+    :set Fresh true
     /file/remove [ find where name=$StampFile ]
     /file/add name=$StampFile contents=$Expires
-    :log info ("acme-distributor: installed " . $LeafName . " for " . $Domain . ", expires at unix " . $Expires)
+  }
+
+  :local Leaf [ /certificate/find where name=$CertName ]
+  :if ([ :len $Leaf ] = 0) do={ :set Leaf [ /certificate/find where name=($CertName . "_0") ] }
+  :if ([ :len $Leaf ] != 1) do={ :error "certificate not found after import" }
+  :local LeafName [ /certificate/get ($Leaf->0) name ]
+
+  :if ($Fresh = true) do={
+    :log info ("acme-distributor: imported " . $LeafName . " for " . $Domain . ", expires at unix " . $Expires)
+  }
+
+  # enforce the service binding on every run, not just on renewal: the import
+  # above leaves a dangling reference, and manual changes get corrected too
+  # ponytail: only /ip/service entries, add hotspot/ovpn/ipsec profiles if used
+  :foreach S in=$Services do={
+    :local Svc [ /ip/service/find where name=$S ]
+    :if ([ :len $Svc ] != 1) do={
+      :log warning ("acme-distributor: no service named " . $S)
+    } else={
+      :if ([ /ip/service/get ($Svc->0) certificate ] != $LeafName) do={
+        /ip/service/set ($Svc->0) certificate=$LeafName
+        :log info ("acme-distributor: pointed " . $S . " at " . $LeafName)
+      }
+    }
   }
 } do={
   :set AcmeDistData ""
